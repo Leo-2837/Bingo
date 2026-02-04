@@ -476,5 +476,217 @@ if(!earlyInitRun){
   generateBoard();
 }
 </script>
+
+<script type="module">
+  // Wir importieren Firebase erneut (ist erlaubt)
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getDatabase, ref, set, update, onValue, get, child }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+  // Deine Config erneut – kein Problem
+  const firebaseConfig = {
+    apiKey: "AIzaSyACvAtQUjfLcXrf9IFvzbkjZJNuvKdTxxA",
+    authDomain: "juha-bingo.firebaseapp.com",
+    databaseURL: "https://juha-bingo-default-rtdb.firebaseio.com",
+    projectId: "juha-bingo",
+    storageBucket: "juha-bingo.firebasestorage.app",
+    messagingSenderId: "231171590379",
+    appId: "1:231171590379:web:97cc31704cd5228c3916ae",
+    measurementId: "G-DM99GR9Z57"
+  };
+
+  // Zweite Firebase-Instanz initialisieren (keine Konflikte)
+  const app2 = initializeApp(firebaseConfig, "multiplayer");
+  const db   = getDatabase(app2);
+
+
+  /* =========================================================
+     Multiplayer UI einfügen
+     ========================================================= */
+
+  const uiHTML = `
+    <div class="toolbar" style="margin-top:12px;">
+      <input id="mp_name" placeholder="Dein Name" style="max-width:140px;">
+      <button id="mp_create">Match erstellen</button>
+      <input id="mp_code" placeholder="Raumcode" style="max-width:120px;">
+      <button id="mp_join">Beitreten</button>
+    </div>
+
+    <div class="toolbar">
+      <span id="mp_status" style="font-weight:700;"></span>
+    </div>
+
+    <div class="toolbar">
+      <label>Gegner ansehen:</label>
+      <select id="mp_opponents"><option value="">—</option></select>
+    </div>
+
+    <h2>Gegner-Board</h2>
+    <div id="mp_enemy" 
+      style="display:grid;gap:var(--gap);justify-content:center;margin-bottom:20px;">
+    </div>
+  `;
+
+  // UI einfügen
+  document.body.insertAdjacentHTML("beforeend", uiHTML);
+
+
+  /* =========================================================
+     Variablen & DOM
+     ========================================================= */
+
+  const nameInput = document.getElementById("mp_name");
+  const codeInput = document.getElementById("mp_code");
+  const joinBtn   = document.getElementById("mp_join");
+  const createBtn = document.getElementById("mp_create");
+  const statusLbl = document.getElementById("mp_status");
+  const oppSelect = document.getElementById("mp_opponents");
+  const enemyDiv  = document.getElementById("mp_enemy");
+
+  let ROOM = null;
+  let PLAYER = null;
+  let unsubOpp = null;
+
+
+  /* =========================================================
+     Hilfsfunktionen
+     ========================================================= */
+
+  function randomCode() {
+    const c = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let s = "";
+    for (let i=0;i<6;i++) s += c[Math.floor(Math.random()*c.length)];
+    return s;
+  }
+
+  function setStatus(msg) {
+    statusLbl.textContent = msg;
+  }
+
+
+  /* =========================================================
+     Raum erstellen
+     ========================================================= */
+
+  createBtn.onclick = async () => {
+    PLAYER = nameInput.value.trim() || "Spieler" + Math.floor(Math.random()*1000);
+    ROOM = randomCode();
+
+    await set(ref(db, `rooms/${ROOM}`), {
+      created: Date.now(),
+      maxPlayers: 4
+    });
+
+    setStatus(`Raum erstellt: ${ROOM}`);
+    codeInput.value = ROOM;
+
+    joinRoom();
+  };
+
+
+  /* =========================================================
+     Raum beitreten
+     ========================================================= */
+
+  joinBtn.onclick = () => {
+    PLAYER = nameInput.value.trim() || "Spieler" + Math.floor(Math.random()*1000);
+    ROOM = codeInput.value.trim().toUpperCase();
+    joinRoom();
+  };
+
+
+  async function joinRoom() {
+    if (!ROOM) return alert("Kein Raumcode!");
+
+    await update(ref(db, `rooms/${ROOM}/players/${PLAYER}`), {
+      joined: Date.now()
+    });
+
+    setStatus(`Verbunden als ${PLAYER} in ${ROOM}`);
+
+    // Gegnerliste beobachten
+    onValue(ref(db, `rooms/${ROOM}/players`), snap => {
+      const players = snap.val() || {};
+      oppSelect.innerHTML = `<option value="">—</option>`;
+      Object.keys(players).forEach(p => {
+        if (p !== PLAYER) {
+          oppSelect.innerHTML += `<option value="${p}">${p}</option>`;
+        }
+      });
+    });
+  }
+
+
+  /* =========================================================
+     Eigenes Board speichern
+     ========================================================= */
+
+  function saveBoard() {
+    if (!ROOM || !PLAYER) return;
+
+    const size = parseInt(sizeSelect.value);
+    const cells = [...document.querySelectorAll(".cell")];
+
+    const payload = {};
+    cells.forEach((cell, i) => {
+      const input = cell.querySelector("input");
+      payload[i] = {
+        text: input ? input.value : cell.textContent,
+        marked: cell.classList.contains("marked")
+      };
+    });
+
+    update(ref(db, `rooms/${ROOM}/players/${PLAYER}`), {
+      size,
+      board: payload
+    });
+  }
+
+  // Hooks in bestehende Funktionen
+  const oldAuto = window.autoSave;
+  window.autoSave = function() {
+    oldAuto();
+    saveBoard();
+  };
+
+  const oldMark = window.markCell;
+  window.markCell = function(cell) {
+    oldMark(cell);
+    saveBoard();
+  };
+
+
+  /* =========================================================
+     Gegnerboard anzeigen
+     ========================================================= */
+
+  oppSelect.onchange = () => {
+    if (unsubOpp) unsubOpp();
+    enemyDiv.innerHTML = "";
+
+    const enemy = oppSelect.value;
+    if (!enemy) return;
+
+    unsubOpp = onValue(ref(db, `rooms/${ROOM}/players/${enemy}/board`), snap => {
+      const board = snap.val();
+      renderEnemy(board);
+    });
+  };
+
+  function renderEnemy(board) {
+    const size = parseInt(sizeSelect.value);
+    enemyDiv.style.gridTemplateColumns = `repeat(${size}, var(--cell))`;
+    enemyDiv.innerHTML = "";
+
+    for (let i=0;i<size*size;i++) {
+      const d = board?.[i] || { text:"", marked:false };
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      cell.textContent = d.text;
+      if (d.marked) cell.classList.add("marked");
+      enemyDiv.appendChild(cell);
+    }
+  }
+</script>
 </body>
 </html>
