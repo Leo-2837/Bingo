@@ -195,9 +195,10 @@ function updateCellSize() {
   board.style.gridTemplateColumns = `repeat(${cols}, var(--cell))`;
 }
 
-/* ----------- ORIGINAL CODE (minimal angepasst) ----------- */
+/* ----------- ORIGINAL CODE (mit Fixes) ----------- */
 
 let editing = true;
+let gameStarted = false;  // NEU: merkt, ob schon einmal gestartet wurde
 let winMessageTimeout = null;
 
 // Konfetti
@@ -214,6 +215,23 @@ const startBtn   = document.getElementById('startBtn');
 const resetBtn   = document.getElementById('resetBtn');
 const winMessage = document.getElementById('winMessage');
 
+/* --- Button-Zustände zentral steuern (NEU) --- */
+function updateButtons() {
+  if (!gameStarted) {
+    // Noch nie gestartet: Bearbeiten gesperrt, "Weiter spielen" erscheint NICHT.
+    editBtn.disabled = true;
+    editBtn.textContent = "Bearbeiten";
+    startBtn.disabled = false;
+    startBtn.textContent = "Start";
+    return;
+  }
+  // Ab hier: Spiel wurde schon gestartet
+  editBtn.disabled = false;
+  editBtn.textContent = editing ? "Weiter spielen" : "Bearbeiten";
+  startBtn.disabled = false; // "Start" kann weiterhin in den Spielmodus wechseln
+  startBtn.textContent = "Start";
+}
+
 /* SAFARI / FILE-VORSCHAU ROBUST */
 document.addEventListener('DOMContentLoaded', safeInit);
 let earlyInitRun = false;
@@ -228,7 +246,12 @@ function safeInit() {
     const saved = JSON.parse(localStorage.getItem("bingoCells") || "null");
     if (saved && Array.isArray(saved.cells)) {
       loadBoardFromData(saved);
-      if (saved.mode === "play") setPlayMode();
+      if (saved.mode === "play") {
+        setPlayMode();
+        gameStarted = true; // NEU: merken, dass schon gestartet wurde
+      } else {
+        editing = true;
+      }
     }
 
     window.addEventListener('resize', () => {
@@ -245,14 +268,16 @@ function safeInit() {
     startBtn.addEventListener('click', startGame);
     editBtn.addEventListener('click', toggleEdit);
     resetBtn.addEventListener('click', resetBoard);
+
+    // Nach dem Aufbau Buttons korrekt setzen
+    updateButtons();
   } catch(e) {}
 }
 
 /* -------- BOARD -------- */
 function generateBoard() {
   stopWinEffects();
-
-  updateCellSize(); // <<< WICHTIG: Responsive Berechnung
+  updateCellSize();
 
   const size = parseInt(sizeSelect.value || "5", 10);
   board.innerHTML = "";
@@ -270,17 +295,19 @@ function generateBoard() {
   }
 
   editing = true;
-  editBtn.textContent = "Weiter spielen";
+  // EDIT: Nicht mehr pauschal "Weiter spielen" setzen.
+  updateButtons(); // NEU
 }
 
 function startGame() {
   setPlayMode();
+  gameStarted = true;  // NEU
   autoSave();
+  updateButtons();     // NEU
 }
 
 function setPlayMode() {
   editing = false;
-  editBtn.textContent = "Bearbeiten";
 
   document.querySelectorAll('.cell').forEach(cell => {
     const input = cell.querySelector('input');
@@ -289,24 +316,30 @@ function setPlayMode() {
     if (input) input.remove();
     cell.onclick = () => markCell(cell);
   });
+
+  updateButtons(); // NEU
 }
 
 function toggleEdit() {
+  // Modus umschalten
   editing = !editing;
-  editBtn.textContent = editing ? "Weiter spielen" : "Bearbeiten";
 
   document.querySelectorAll('.cell').forEach(cell => {
     const currentText = cell.textContent;
     cell.onclick = null;
 
     if (editing) {
-      cell.classList.remove('marked');
+      // WICHTIGER FIX: Markierungen NICHT entfernen!
+      // cell.classList.remove('marked');  <-- entfernt
+
+      // In den Edit-Modus: Eingabefeld wieder anzeigen
       cell.textContent = "";
       const input = document.createElement('input');
       input.value = currentText;
       input.addEventListener('input', autoSave);
       cell.appendChild(input);
     } else {
+      // Zurück in den Spielmodus
       const input = cell.querySelector('input');
       const txt = input ? input.value : currentText;
       if (input) input.remove();
@@ -317,6 +350,7 @@ function toggleEdit() {
 
   stopWinEffects();
   autoSave();
+  updateButtons(); // NEU
 }
 
 function markCell(cell) {
@@ -463,12 +497,14 @@ function resetBoard(){
     localStorage.removeItem("bingoSize");
   } catch(e){}
 
-  // Wenn du beim Reset immer 5×5 möchtest, entkommentiere die nächste Zeile:
-  // sizeSelect.value = "5";
-
   // Größe neu berechnen & frisches Board erzeugen
   updateCellSize();
   generateBoard();
+
+  // NEU: Zurück in Anfangszustand
+  gameStarted = false;
+  editing = true;
+  updateButtons();
 }
 
 /* Sofort-Init für harte iPhone-Fälle */
